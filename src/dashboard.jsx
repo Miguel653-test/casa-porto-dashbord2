@@ -9,9 +9,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const ZONES = ["Porto", "Matosinhos", "São Mamede de Infesta", "Pedrouços", "Rio Tinto", "Fânzeres", "São Cosme"];
 
-// Progress stage order — furthest TRUE toggle wins. Discarded overrides everything.
+// Progress stage order — furthest TRUE toggle wins. Discarded/standby override everything else.
 function getProgressStage(listing) {
   if (listing.discarded) return "Descartada";
+  if (listing.standby) return "Stand-by";
   if (listing.proposal_sent) return "Proposta enviada";
   if (listing.visit_done) return "Visitada";
   if (listing.reply_received) return "Resposta recebida";
@@ -28,6 +29,20 @@ function formatDate(d) {
   if (!d) return "—";
   const date = new Date(d + "T12:00:00");
   return date.toLocaleDateString("pt-PT", { day: "2-digit", month: "short" });
+}
+
+function formatDateTime(dt) {
+  if (!dt) return "";
+  const date = new Date(dt);
+  return date.toLocaleDateString("pt-PT", { day: "2-digit", month: "short" }) +
+    " " + date.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" });
+}
+
+function toDateTimeInputValue(dt) {
+  if (!dt) return "";
+  const date = new Date(dt);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // ── Login screen ─────────────────────────────────────────────────────────
@@ -215,15 +230,51 @@ function DetailPanel({ listing, onClose, onUpdate }) {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card detail-card" onClick={(e) => e.stopPropagation()}>
         <div className="detail-header">
-          <div>
-            <div className="detail-title">
-              {local.region || "—"} · {local.typology || "—"} · {formatPrice(local.price)}
+          <div className="detail-header-fields">
+            <input
+              className="detail-inline-input detail-url"
+              type="text"
+              value={local.url || ""}
+              onChange={(e) => save({ url: e.target.value })}
+              placeholder="Link do anúncio"
+            />
+            <div className="detail-header-row">
+              <input
+                className="detail-inline-input"
+                type="text"
+                value={local.region || ""}
+                onChange={(e) => save({ region: e.target.value })}
+                placeholder="Zona"
+                style={{ width: 110 }}
+              />
+              <input
+                className="detail-inline-input"
+                type="text"
+                value={local.typology || ""}
+                onChange={(e) => save({ typology: e.target.value })}
+                placeholder="Tipologia"
+                style={{ width: 60 }}
+              />
+              <input
+                className="detail-inline-input"
+                type="text"
+                value={local.source || ""}
+                onChange={(e) => save({ source: e.target.value })}
+                placeholder="Site"
+                style={{ width: 90 }}
+              />
+              <input
+                className="detail-inline-input"
+                type="number"
+                value={local.price ?? ""}
+                onChange={(e) => save({ price: e.target.value ? Number(e.target.value) : null })}
+                placeholder="Preço"
+                style={{ width: 90 }}
+              />
             </div>
-            <div className="detail-sub">
-              {local.source || "—"} · adicionada a {formatDate(local.day_added)}
-            </div>
+            <div className="detail-sub">adicionada a {formatDate(local.day_added)}</div>
           </div>
-          <span className={`progress-tag ${local.discarded ? "is-discarded" : ""}`}>
+          <span className={`progress-tag ${local.discarded ? "is-discarded" : ""} ${local.standby ? "is-standby" : ""}`}>
             {getProgressStage(local)}
           </span>
         </div>
@@ -235,18 +286,19 @@ function DetailPanel({ listing, onClose, onUpdate }) {
           </div>
 
           <div className="detail-row">
-            <label>Preço atual (€)</label>
-            <input
-              type="number"
-              value={local.price ?? ""}
-              onChange={(e) => save({ price: e.target.value ? Number(e.target.value) : null })}
-              style={{ width: 120 }}
-            />
+            <label>Mensagem enviada</label>
+            <input type="checkbox" checked={!!local.message_sent} onChange={(e) => save({ message_sent: e.target.checked })} />
           </div>
 
           <div className="detail-row">
-            <label>Mensagem enviada</label>
-            <input type="checkbox" checked={!!local.message_sent} onChange={(e) => save({ message_sent: e.target.checked })} />
+            <label>Enviada por</label>
+            <input
+              type="text"
+              value={local.sent_by || ""}
+              onChange={(e) => save({ sent_by: e.target.value })}
+              placeholder="Nome"
+              style={{ width: 120 }}
+            />
           </div>
 
           <div className="detail-row">
@@ -257,6 +309,16 @@ function DetailPanel({ listing, onClose, onUpdate }) {
           <div className="detail-row">
             <label>Visita feita</label>
             <input type="checkbox" checked={!!local.visit_done} onChange={(e) => save({ visit_done: e.target.checked })} />
+          </div>
+
+          <div className="detail-row">
+            <label>Data e hora da visita</label>
+            <input
+              type="datetime-local"
+              value={toDateTimeInputValue(local.visit_datetime)}
+              onChange={(e) => save({ visit_datetime: e.target.value ? new Date(e.target.value).toISOString() : null })}
+              style={{ width: 180 }}
+            />
           </div>
 
           <div className="detail-textarea">
@@ -289,6 +351,13 @@ function DetailPanel({ listing, onClose, onUpdate }) {
 
         <div className="detail-footer">
           <button
+            className="btn-standby"
+            onClick={() => save({ standby: !local.standby })}
+          >
+            <i className={`ti ${local.standby ? "ti-player-play" : "ti-player-pause"}`} />
+            {local.standby ? "Retirar stand-by" : "Stand-by"}
+          </button>
+          <button
             className="btn-discard"
             onClick={() => save({ discarded: !local.discarded })}
           >
@@ -305,7 +374,7 @@ function DetailPanel({ listing, onClose, onUpdate }) {
 
 const SORT_FIELDS = {
   region: "Zona", typology: "Tipologia", price: "Preço",
-  source: "Site", day_added: "Data", score: "Nota",
+  source: "Site", day_added: "Data", score: "Nota", sent_by: "Enviada por",
 };
 
 export default function Dashboard() {
@@ -459,6 +528,7 @@ export default function Dashboard() {
             <option>Resposta recebida</option>
             <option>Visitada</option>
             <option>Proposta enviada</option>
+            <option>Stand-by</option>
             <option>Descartada</option>
           </select>
         </div>
@@ -509,9 +579,9 @@ export default function Dashboard() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8}><div className="empty-state">A carregar...</div></td></tr>
+              <tr><td colSpan={9}><div className="empty-state">A carregar...</div></td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={8}><div className="empty-state">Sem casas para este filtro.</div></td></tr>
+              <tr><td colSpan={9}><div className="empty-state">Sem casas para este filtro.</div></td></tr>
             ) : (
               filtered.map(l => (
                 <tr
@@ -530,8 +600,9 @@ export default function Dashboard() {
                   <td onClick={e => e.stopPropagation()}>
                     <ScoreStamp value={l.score} onChange={(v) => updateListing(l.id, { score: v })} />
                   </td>
+                  <td>{l.sent_by || "—"}</td>
                   <td>
-                    <span className={`progress-tag ${l.discarded ? "is-discarded" : ""}`}>
+                    <span className={`progress-tag ${l.discarded ? "is-discarded" : ""} ${l.standby ? "is-standby" : ""}`}>
                       {getProgressStage(l)}
                     </span>
                   </td>
@@ -753,6 +824,35 @@ td { padding: 12px 14px; font-size: 13.5px; vertical-align: middle; }
   white-space: nowrap;
 }
 .progress-tag.is-discarded { opacity: 0.6; text-decoration: line-through; }
+.progress-tag.is-standby { font-style: italic; }
+
+.detail-header-fields { flex: 1; }
+.detail-header-row { display: flex; gap: 8px; margin: 6px 0; }
+.detail-inline-input {
+  border: 1.5px solid transparent;
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: inherit;
+  background: transparent;
+}
+.detail-inline-input:hover, .detail-inline-input:focus {
+  border-color: var(--line);
+  background: var(--paper);
+}
+.detail-url { width: 100%; font-weight: 500; color: var(--azulejo); }
+
+.btn-standby {
+  display: flex; align-items: center; gap: 6px;
+  background: none;
+  border: 1.5px solid var(--line);
+  color: var(--ink-soft);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  margin-right: auto;
+}
 
 .empty-state { padding: 50px 20px; text-align: center; color: var(--ink-soft); font-family: 'IBM Plex Mono', monospace; font-size: 13px; }
 
