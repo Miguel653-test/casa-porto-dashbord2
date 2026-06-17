@@ -42,6 +42,91 @@ function contactUrgencyClass(days) {
   return "urgency-bad";
 }
 
+function daysBetween(dateStr) {
+  if (!dateStr) return null;
+  const target = new Date(dateStr);
+  target.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((today - target) / (1000 * 60 * 60 * 24));
+}
+
+// Builds the "needs attention" alert list from the 4 rules.
+function getAlerts(listings) {
+  const alerts = [];
+
+  for (const l of listings) {
+    if (l.discarded || l.standby) continue;
+
+    const label = `${l.region || "—"} · ${l.typology || "—"} · ${formatPrice(l.price)}`;
+
+    // Rule 1 — more than 7 days since last contact
+    if (l.last_contact_date) {
+      const days = daysBetween(l.last_contact_date);
+      if (days != null && days > 7) {
+        alerts.push({
+          id: `${l.id}-contact`, listing: l, label,
+          message: `${days} dias sem contacto`,
+          action: "contactar ou descartar",
+          tier: "danger",
+        });
+      }
+    }
+
+    // Rule 2 — visit scheduled but not marked done, and date already passed
+    if (l.visit_scheduled && !l.visit_done && l.visit_datetime) {
+      const days = daysBetween(l.visit_datetime);
+      if (days != null && days >= 1) {
+        alerts.push({
+          id: `${l.id}-visit-unconfirmed`, listing: l, label,
+          message: `visita agendada há ${days} dia${days === 1 ? "" : "s"}, sem registo de visita feita`,
+          action: "confirmar visita",
+          tier: "warning",
+        });
+      }
+    }
+
+    // Rule 3 — visit scheduled within the next 2 days (reminder, not a problem)
+    if (l.visit_scheduled && !l.visit_done && l.visit_datetime) {
+      const days = daysBetween(l.visit_datetime); // negative = in the future
+      if (days != null && days < 0 && days >= -2) {
+        const daysUntil = Math.abs(days);
+        alerts.push({
+          id: `${l.id}-visit-soon`, listing: l, label,
+          message: daysUntil === 0 ? "visita marcada para hoje" : `visita marcada para dentro de ${daysUntil} dia${daysUntil === 1 ? "" : "s"}`,
+          action: "preparar visita",
+          tier: "info",
+        });
+      }
+    }
+
+    // Rule 4 — stuck in "Novo" for more than 3 days
+    if (getProgressStage(l) === "Novo") {
+      const days = daysBetween(l.day_added);
+      if (days != null && days > 3) {
+        alerts.push({
+          id: `${l.id}-stale-new`, listing: l, label,
+          message: `em "Novo" há ${days} dias, ainda sem contacto`,
+          action: "decidir",
+          tier: "neutral",
+        });
+      }
+    }
+  }
+
+  // Sort by severity: danger > warning > info > neutral
+  const order = { danger: 0, warning: 1, info: 2, neutral: 3 };
+  alerts.sort((a, b) => order[a.tier] - order[b.tier]);
+  return alerts;
+}
+
+const FUNNEL_STAGES = ["Novo", "Contactado", "Resposta recebida", "Visita agendada", "Visitada", "Proposta enviada"];
+
+function getFunnelCounts(listings) {
+  const active = listings.filter(l => !l.discarded);
+  return FUNNEL_STAGES.map(stage => active.filter(l => getProgressStage(l) === stage).length);
+}
+
 function formatPrice(p) {
   if (p == null) return "—";
   return p.toLocaleString("pt-PT") + " €";
@@ -416,12 +501,102 @@ const SORT_FIELDS = {
   score: "Nota", sent_by: "Enviada por",
 };
 
+const ALERT_TIER_CLASS = {
+  danger: "alert-danger", warning: "alert-warning",
+  info: "alert-info", neutral: "alert-neutral",
+};
+
+function MetricsView({ listings }) {
+  const canvasRef = React.useRef(null);
+  const chartRef = React.useRef(null);
+
+  const alerts = useMemo(() => getAlerts(listings), [listings]);
+  const funnelCounts = useMemo(() => getFunnelCounts(listings), [listings]);
+
+  useEffect(() => {
+    if (!window.Chart) {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";
+      script.onload = () => renderChart();
+      document.body.appendChild(script);
+    } else {
+      renderChart();
+    }
+    return () => {
+      if (chartRef.current) chartRef.current.destroy();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [funnelCounts]);
+
+  function renderChart() {
+    if (!window.Chart || !canvasRef.current) return;
+    if (chartRef.current) chartRef.current.destroy();
+    chartRef.current = new window.Chart(canvasRef.current, {
+      type: "bar",
+      data: {
+        labels: ["Novo", "Contactado", "Resposta", "Visita agend.", "Visitada", "Proposta"],
+        datasets: [{ data: funnelCounts, backgroundColor: "#7F77DD", borderRadius: 4 }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } },
+      },
+    });
+  }
+
+  return (
+    <div className="metrics-view">
+      <div className="metrics-section">
+        <div className="metrics-section-title">
+          <i className="ti ti-bell" /> Precisam de atenção
+        </div>
+        {alerts.length === 0 ? (
+          <div className="empty-state">Nenhum alerta neste momento.</div>
+        ) : (
+          <div className="alert-list">
+            {alerts.map(a => (
+              <div
+                key={a.id}
+                className={`alert-card ${ALERT_TIER_CLASS[a.tier]}`}
+                onClick={() => window.dispatchEvent(new CustomEvent("open-listing", { detail: a.listing.id }))}
+              >
+                <div>
+                  <span className="alert-label">{a.label}</span>
+                  <span className="alert-message">{a.message}</span>
+                </div>
+                <span className="alert-action">{a.action}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="metrics-section">
+        <div className="metrics-section-title">Funil de progresso</div>
+        <div className="chart-legend">
+          <span><span className="legend-dot" style={{ background: "#7F77DD" }} />Casas</span>
+        </div>
+        <div style={{ position: "relative", width: "100%", height: 220 }}>
+          <canvas
+            ref={canvasRef}
+            role="img"
+            aria-label={`Funil de progresso: ${FUNNEL_STAGES.map((s, i) => `${s} ${funnelCounts[i]}`).join(", ")}`}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [session, setSession] = useState(null);
   const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [activeListing, setActiveListing] = useState(null);
+  const [view, setView] = useState("table");
 
   const [sortField, setSortField] = useState("day_added");
   const [sortDir, setSortDir] = useState("desc");
@@ -442,6 +617,19 @@ export default function Dashboard() {
     if (!session) return;
     fetchListings();
   }, [session]);
+
+  useEffect(() => {
+    function handleOpenFromAlert(e) {
+      const id = e.detail;
+      const target = listings.find(l => l.id === id);
+      if (target) {
+        setActiveListing(target);
+        setView("table");
+      }
+    }
+    window.addEventListener("open-listing", handleOpenFromAlert);
+    return () => window.removeEventListener("open-listing", handleOpenFromAlert);
+  }, [listings]);
 
   async function fetchListings() {
     setLoading(true);
@@ -532,9 +720,25 @@ export default function Dashboard() {
       <div className="masthead">
         <div>
           <div className="masthead-title">Casas — Porto</div>
-          <div className="masthead-sub">{filtered.length} casas visíveis</div>
+          <div className="masthead-sub">
+            {view === "table" ? `${filtered.length} casas visíveis` : "Métricas e alertas"}
+          </div>
         </div>
         <div className="masthead-actions">
+          <div className="view-switch">
+            <button
+              className={`view-tab ${view === "table" ? "active" : ""}`}
+              onClick={() => setView("table")}
+            >
+              Tabela
+            </button>
+            <button
+              className={`view-tab ${view === "metrics" ? "active" : ""}`}
+              onClick={() => setView("metrics")}
+            >
+              Métricas
+            </button>
+          </div>
           <button className="btn-primary" onClick={() => setShowAddForm(true)}>
             <i className="ti ti-plus" /> Adicionar casa
           </button>
@@ -544,6 +748,12 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {view === "metrics" && (
+        <MetricsView listings={listings} />
+      )}
+
+      {view === "table" && (
+      <>
       <div className="filter-bar">
         <div className="filter-group">
           <span className="filter-label">Data adição</span>
@@ -707,6 +917,8 @@ export default function Dashboard() {
           </tbody>
         </table>
       </div>
+      </>
+      )}
 
       {showAddForm && (
         <AddHouseForm onAdd={addListing} onClose={() => setShowAddForm(false)} />
@@ -806,7 +1018,76 @@ body { margin: 0; }
 }
 .masthead-title { font-family: 'Fraunces', serif; font-size: 28px; font-weight: 600; }
 .masthead-sub { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); margin-top: 4px; }
-.masthead-actions { display: flex; gap: 10px; }
+.masthead-actions { display: flex; gap: 10px; align-items: center; }
+
+.view-switch {
+  display: flex;
+  background: var(--paper);
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+  margin-right: 6px;
+}
+.view-tab {
+  border: none;
+  background: transparent;
+  font-size: 12.5px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  color: var(--ink-soft);
+}
+.view-tab.active {
+  background: var(--paper-raised);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.metrics-view { display: flex; flex-direction: column; gap: 28px; margin-bottom: 20px; }
+.metrics-section-title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.metrics-section-title i { font-size: 14px; color: var(--discard-red); }
+
+.alert-list { display: flex; flex-direction: column; gap: 8px; }
+.alert-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+.alert-card:hover { border-color: var(--azulejo); }
+.alert-label { font-weight: 500; font-size: 13.5px; }
+.alert-message { color: var(--ink-soft); font-size: 12.5px; margin-left: 10px; }
+.alert-action {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 100px;
+  white-space: nowrap;
+}
+.alert-danger { border-left: 3px solid var(--discard-red); }
+.alert-danger .alert-action { background: rgba(163,45,45,0.12); color: var(--discard-red); }
+.alert-warning { border-left: 3px solid #BA8A2E; }
+.alert-warning .alert-action { background: rgba(186,138,46,0.15); color: #85530B; }
+.alert-info { border-left: 3px solid var(--azulejo); }
+.alert-info .alert-action { background: rgba(27,73,101,0.1); color: var(--azulejo); }
+.alert-neutral { border-left: 3px solid var(--line); }
+.alert-neutral .alert-action { background: var(--paper); color: var(--ink-soft); }
+
+.chart-legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-soft); margin-bottom: 8px; }
+.chart-legend span { display: flex; align-items: center; gap: 4px; }
+.legend-dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 
 button { font-family: 'Inter', sans-serif; cursor: pointer; }
 
