@@ -513,6 +513,27 @@ function MetricsView({ listings }) {
   const alerts = useMemo(() => getAlerts(listings), [listings]);
   const funnelCounts = useMemo(() => getFunnelCounts(listings), [listings]);
 
+  const metrics = useMemo(() => {
+    const active = listings.filter(l => !l.discarded && !l.standby);
+    const standby = listings.filter(l => l.standby && !l.discarded);
+    const discarded = listings.filter(l => l.discarded);
+    const contacted = listings.filter(l => l.message_sent);
+    const replied = contacted.filter(l => l.reply_received);
+    const visited = listings.filter(l => l.visit_done);
+
+    const responseRate = contacted.length > 0
+      ? Math.round((replied.length / contacted.length) * 100)
+      : null;
+
+    return {
+      activeCount: active.length,
+      standbyCount: standby.length,
+      discardedCount: discarded.length,
+      visitedCount: visited.length,
+      responseRate,
+    };
+  }, [listings]);
+
   useEffect(() => {
     if (!window.Chart) {
       const script = document.createElement("script");
@@ -548,6 +569,29 @@ function MetricsView({ listings }) {
 
   return (
     <div className="metrics-view">
+      <div className="metric-cards">
+        <div className="metric-card">
+          <div className="metric-label">Casas ativas</div>
+          <div className="metric-value">{metrics.activeCount}</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Em stand-by</div>
+          <div className="metric-value">{metrics.standbyCount}</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Taxa de resposta</div>
+          <div className="metric-value">{metrics.responseRate != null ? `${metrics.responseRate}%` : "—"}</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Visitas feitas</div>
+          <div className="metric-value">{metrics.visitedCount}</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Descartadas</div>
+          <div className="metric-value">{metrics.discardedCount}</div>
+        </div>
+      </div>
+
       <div className="metrics-section">
         <div className="metrics-section-title">
           <i className="ti ti-bell" /> Precisam de atenção
@@ -1043,6 +1087,32 @@ body { margin: 0; }
 }
 
 .metrics-view { display: flex; flex-direction: column; gap: 28px; margin-bottom: 20px; }
+
+.metric-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.metric-card {
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.metric-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+.metric-value {
+  font-size: 24px;
+  font-weight: 600;
+  margin-top: 6px;
+  font-family: 'Fraunces', serif;
+}
+
 .metrics-section-title {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11.5px;
