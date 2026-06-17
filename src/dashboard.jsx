@@ -678,6 +678,13 @@ export default function Dashboard() {
                   <td>{l.source || "—"}</td>
                   <td className="date-cell">{formatDate(l.day_added)}</td>
                   <td className="date-cell">{formatDateTime(l.visit_datetime) || "—"}</td>
+                  <td className="date-cell">
+                    {l.last_contact_date ? (
+                      <span className={`urgency-pill ${contactUrgencyClass(daysSinceContact(l.last_contact_date))}`}>
+                        {formatDate(l.last_contact_date)}
+                      </span>
+                    ) : "—"}
+                  </td>
                   <td onClick={e => e.stopPropagation()}>
                     <ScoreStamp value={l.score} onChange={(v) => updateListing(l.id, { score: v })} />
                   </td>
