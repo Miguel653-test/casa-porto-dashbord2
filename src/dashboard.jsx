@@ -15,9 +15,15 @@ function getProgressStage(listing) {
   if (listing.standby) return "Stand-by";
   if (listing.proposal_sent) return "Proposta enviada";
   if (listing.visit_done) return "Visitada";
+  if (listing.visit_scheduled) return "Visita agendada";
   if (listing.reply_received) return "Resposta recebida";
   if (listing.message_sent) return "Contactado";
   return "Novo";
+}
+
+const ONGOING_STAGES = ["Contactado", "Resposta recebida", "Visita agendada", "Visitada", "Proposta enviada"];
+function isOngoing(stage) {
+  return ONGOING_STAGES.includes(stage);
 }
 
 function formatPrice(p) {
@@ -274,7 +280,7 @@ function DetailPanel({ listing, onClose, onUpdate }) {
             </div>
             <div className="detail-sub">adicionada a {formatDate(local.day_added)}</div>
           </div>
-          <span className={`progress-tag ${local.discarded ? "is-discarded" : ""} ${local.standby ? "is-standby" : ""}`}>
+          <span className={`progress-tag ${local.discarded ? "is-discarded" : ""} ${local.standby ? "is-standby" : ""} ${isOngoing(getProgressStage(local)) ? "is-ongoing" : ""}`}>
             {getProgressStage(local)}
           </span>
         </div>
@@ -304,6 +310,11 @@ function DetailPanel({ listing, onClose, onUpdate }) {
           <div className="detail-row">
             <label>Resposta recebida</label>
             <input type="checkbox" checked={!!local.reply_received} onChange={(e) => save({ reply_received: e.target.checked })} />
+          </div>
+
+          <div className="detail-row">
+            <label>Visita agendada</label>
+            <input type="checkbox" checked={!!local.visit_scheduled} onChange={(e) => save({ visit_scheduled: e.target.checked })} />
           </div>
 
           <div className="detail-row">
@@ -374,7 +385,8 @@ function DetailPanel({ listing, onClose, onUpdate }) {
 
 const SORT_FIELDS = {
   region: "Zona", typology: "Tipologia", price: "Preço",
-  source: "Site", day_added: "Data", score: "Nota", sent_by: "Enviada por",
+  source: "Site", day_added: "Data adição", visit_datetime: "Data visita",
+  score: "Nota", sent_by: "Enviada por",
 };
 
 export default function Dashboard() {
@@ -451,6 +463,10 @@ export default function Dashboard() {
 
     rows.sort((a, b) => {
       let av = a[sortField], bv = b[sortField];
+      if (sortField === "visit_datetime") {
+        av = av ? new Date(av).getTime() : null;
+        bv = bv ? new Date(bv).getTime() : null;
+      }
       if (typeof av === "string") av = av.toLowerCase();
       if (typeof bv === "string") bv = bv.toLowerCase();
       if (av == null) av = sortDir === "asc" ? Infinity : -Infinity;
@@ -526,6 +542,7 @@ export default function Dashboard() {
             <option>Novo</option>
             <option>Contactado</option>
             <option>Resposta recebida</option>
+            <option>Visita agendada</option>
             <option>Visitada</option>
             <option>Proposta enviada</option>
             <option>Stand-by</option>
@@ -579,9 +596,9 @@ export default function Dashboard() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={9}><div className="empty-state">A carregar...</div></td></tr>
+              <tr><td colSpan={10}><div className="empty-state">A carregar...</div></td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={9}><div className="empty-state">Sem casas para este filtro.</div></td></tr>
+              <tr><td colSpan={10}><div className="empty-state">Sem casas para este filtro.</div></td></tr>
             ) : (
               filtered.map(l => (
                 <tr
@@ -597,12 +614,13 @@ export default function Dashboard() {
                   <td className="price-cell">{formatPrice(l.price)}</td>
                   <td>{l.source || "—"}</td>
                   <td className="date-cell">{formatDate(l.day_added)}</td>
+                  <td className="date-cell">{formatDateTime(l.visit_datetime) || "—"}</td>
                   <td onClick={e => e.stopPropagation()}>
                     <ScoreStamp value={l.score} onChange={(v) => updateListing(l.id, { score: v })} />
                   </td>
                   <td>{l.sent_by || "—"}</td>
                   <td>
-                    <span className={`progress-tag ${l.discarded ? "is-discarded" : ""} ${l.standby ? "is-standby" : ""}`}>
+                    <span className={`progress-tag ${l.discarded ? "is-discarded" : ""} ${l.standby ? "is-standby" : ""} ${isOngoing(getProgressStage(l)) ? "is-ongoing" : ""}`}>
                       {getProgressStage(l)}
                     </span>
                   </td>
@@ -824,7 +842,15 @@ td { padding: 12px 14px; font-size: 13.5px; vertical-align: middle; }
   white-space: nowrap;
 }
 .progress-tag.is-discarded { opacity: 0.6; text-decoration: line-through; }
-.progress-tag.is-standby { font-style: italic; }
+.progress-tag.is-standby { font-style: italic; opacity: 0.75; }
+.progress-tag.is-ongoing {
+  background: rgba(27,73,101,0.08);
+  border-color: rgba(27,73,101,0.3);
+  color: var(--azulejo);
+  border-left: 3px solid var(--azulejo);
+  padding-left: 7px;
+  font-weight: 500;
+}
 
 .detail-header-fields { flex: 1; }
 .detail-header-row { display: flex; gap: 8px; margin: 6px 0; }
