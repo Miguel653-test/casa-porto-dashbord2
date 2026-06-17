@@ -26,6 +26,22 @@ function isOngoing(stage) {
   return ONGOING_STAGES.includes(stage);
 }
 
+function daysSinceContact(lastContactDate) {
+  if (!lastContactDate) return null;
+  const last = new Date(lastContactDate + "T00:00:00");
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffMs = today - last;
+  return Math.round(diffMs / (1000 * 60 * 60 * 24));
+}
+
+function contactUrgencyClass(days) {
+  if (days == null) return "";
+  if (days <= 3) return "urgency-ok";
+  if (days <= 7) return "urgency-warn";
+  return "urgency-bad";
+}
+
 function formatPrice(p) {
   if (p == null) return "—";
   return p.toLocaleString("pt-PT") + " €";
@@ -280,7 +296,7 @@ function DetailPanel({ listing, onClose, onUpdate }) {
             </div>
             <div className="detail-sub">adicionada a {formatDate(local.day_added)}</div>
           </div>
-          <span className={`progress-tag ${local.discarded ? "is-discarded" : ""} ${local.standby ? "is-standby" : ""} ${isOngoing(getProgressStage(local)) ? "is-ongoing" : ""}`}>
+          <span className={`progress-tag ${local.discarded ? "is-discarded" : ""} ${local.standby ? "is-standby" : ""} ${isOngoing(getProgressStage(local)) ? "is-ongoing" : ""} ${getProgressStage(local) === "Novo" ? "is-new" : ""}`}>
             {getProgressStage(local)}
           </span>
         </div>
@@ -294,6 +310,16 @@ function DetailPanel({ listing, onClose, onUpdate }) {
           <div className="detail-row">
             <label>Mensagem enviada</label>
             <input type="checkbox" checked={!!local.message_sent} onChange={(e) => save({ message_sent: e.target.checked })} />
+          </div>
+
+          <div className="detail-row">
+            <label>Data último contacto</label>
+            <input
+              type="date"
+              value={local.last_contact_date || ""}
+              onChange={(e) => save({ last_contact_date: e.target.value || null })}
+              style={{ width: 140 }}
+            />
           </div>
 
           <div className="detail-row">
@@ -386,6 +412,7 @@ function DetailPanel({ listing, onClose, onUpdate }) {
 const SORT_FIELDS = {
   region: "Zona", typology: "Tipologia", price: "Preço",
   source: "Site", day_added: "Data adição", visit_datetime: "Data visita",
+  last_contact_date: "Último contacto",
   score: "Nota", sent_by: "Enviada por",
 };
 
@@ -400,8 +427,9 @@ export default function Dashboard() {
   const [sortDir, setSortDir] = useState("desc");
 
   const [filters, setFilters] = useState({
-    region: "all", typology: "all", source: "all",
-    progress: "all", maxPrice: 400000, minScore: 0, showDiscarded: true,
+    typology: "all", source: "all", progress: "all",
+    maxPrice: 400000, minScore: 0, showDiscarded: true,
+    dayAdded: "", visitDate: "", sentBy: "all",
   });
 
   useEffect(() => {
@@ -451,13 +479,18 @@ export default function Dashboard() {
 
   const filtered = useMemo(() => {
     let rows = listings.filter(l => {
-      if (filters.region !== "all" && !(l.region || "").toLowerCase().includes(filters.region.toLowerCase())) return false;
       if (filters.typology !== "all" && l.typology !== filters.typology) return false;
       if (filters.source !== "all" && (l.source || "").toLowerCase() !== filters.source.toLowerCase()) return false;
       if (filters.progress !== "all" && getProgressStage(l) !== filters.progress) return false;
       if ((l.price ?? 0) > filters.maxPrice) return false;
       if ((l.score ?? 0) < filters.minScore) return false;
       if (!filters.showDiscarded && l.discarded) return false;
+      if (filters.dayAdded && l.day_added !== filters.dayAdded) return false;
+      if (filters.visitDate) {
+        const visitDay = l.visit_datetime ? l.visit_datetime.slice(0, 10) : null;
+        if (visitDay !== filters.visitDate) return false;
+      }
+      if (filters.sentBy !== "all" && (l.sent_by || "") !== filters.sentBy) return false;
       return true;
     });
 
@@ -481,6 +514,7 @@ export default function Dashboard() {
 
   const sources = useMemo(() => [...new Set(listings.map(l => l.source).filter(Boolean))], [listings]);
   const typologies = useMemo(() => [...new Set(listings.map(l => l.typology).filter(Boolean))], [listings]);
+  const sentByOptions = useMemo(() => [...new Set(listings.map(l => l.sent_by).filter(Boolean))].sort(), [listings]);
 
   if (!session) {
     return (
@@ -512,10 +546,38 @@ export default function Dashboard() {
 
       <div className="filter-bar">
         <div className="filter-group">
-          <span className="filter-label">Zona</span>
-          <select value={filters.region} onChange={e => setFilters({ ...filters, region: e.target.value })}>
-            <option value="all">Todas</option>
-            {ZONES.map(z => <option key={z} value={z}>{z}</option>)}
+          <span className="filter-label">Data adição</span>
+          <input
+            type="date"
+            value={filters.dayAdded}
+            onChange={e => setFilters({ ...filters, dayAdded: e.target.value })}
+          />
+          {filters.dayAdded && (
+            <button className="filter-clear" onClick={() => setFilters({ ...filters, dayAdded: "" })}>
+              <i className="ti ti-x" />
+            </button>
+          )}
+        </div>
+
+        <div className="filter-group">
+          <span className="filter-label">Data visita</span>
+          <input
+            type="date"
+            value={filters.visitDate}
+            onChange={e => setFilters({ ...filters, visitDate: e.target.value })}
+          />
+          {filters.visitDate && (
+            <button className="filter-clear" onClick={() => setFilters({ ...filters, visitDate: "" })}>
+              <i className="ti ti-x" />
+            </button>
+          )}
+        </div>
+
+        <div className="filter-group">
+          <span className="filter-label">Enviada por</span>
+          <select value={filters.sentBy} onChange={e => setFilters({ ...filters, sentBy: e.target.value })}>
+            <option value="all">Todos</option>
+            {sentByOptions.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
 
@@ -592,13 +654,14 @@ export default function Dashboard() {
                 </th>
               ))}
               <th>Progresso</th>
+              <th>Dias s/ contacto</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={10}><div className="empty-state">A carregar...</div></td></tr>
+              <tr><td colSpan={11}><div className="empty-state">A carregar...</div></td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={10}><div className="empty-state">Sem casas para este filtro.</div></td></tr>
+              <tr><td colSpan={11}><div className="empty-state">Sem casas para este filtro.</div></td></tr>
             ) : (
               filtered.map(l => (
                 <tr
@@ -620,9 +683,16 @@ export default function Dashboard() {
                   </td>
                   <td>{l.sent_by || "—"}</td>
                   <td>
-                    <span className={`progress-tag ${l.discarded ? "is-discarded" : ""} ${l.standby ? "is-standby" : ""} ${isOngoing(getProgressStage(l)) ? "is-ongoing" : ""}`}>
+                    <span className={`progress-tag ${l.discarded ? "is-discarded" : ""} ${l.standby ? "is-standby" : ""} ${isOngoing(getProgressStage(l)) ? "is-ongoing" : ""} ${getProgressStage(l) === "Novo" ? "is-new" : ""}`}>
                       {getProgressStage(l)}
                     </span>
+                  </td>
+                  <td>
+                    {l.last_contact_date ? (
+                      <span className={`urgency-pill ${contactUrgencyClass(daysSinceContact(l.last_contact_date))}`}>
+                        {daysSinceContact(l.last_contact_date)}d
+                      </span>
+                    ) : "—"}
                   </td>
                 </tr>
               ))
@@ -841,8 +911,20 @@ td { padding: 12px 14px; font-size: 13.5px; vertical-align: middle; }
   border: 1px solid var(--line);
   white-space: nowrap;
 }
+.progress-tag.is-new {
+  background: rgba(91,107,114,0.12);
+  border-color: rgba(91,107,114,0.45);
+  color: var(--ink);
+  font-weight: 600;
+}
 .progress-tag.is-discarded { opacity: 0.6; text-decoration: line-through; }
-.progress-tag.is-standby { font-style: italic; opacity: 0.75; }
+.progress-tag.is-standby {
+  background: rgba(186,138,46,0.12);
+  border-color: rgba(186,138,46,0.4);
+  color: #85530B;
+  font-weight: 500;
+  opacity: 1;
+}
 .progress-tag.is-ongoing {
   background: rgba(27,73,101,0.08);
   border-color: rgba(27,73,101,0.3);
@@ -881,6 +963,36 @@ td { padding: 12px 14px; font-size: 13.5px; vertical-align: middle; }
 }
 
 .empty-state { padding: 50px 20px; text-align: center; color: var(--ink-soft); font-family: 'IBM Plex Mono', monospace; font-size: 13px; }
+
+.urgency-pill {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+.urgency-ok { background: rgba(75,122,81,0.15); color: #27500A; }
+.urgency-warn { background: rgba(186,138,46,0.18); color: #85530B; }
+.urgency-bad { background: rgba(163,45,45,0.15); color: var(--discard-red); }
+
+.filter-clear {
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  padding: 2px;
+  display: flex;
+  align-items: center;
+}
+.filter-clear i { font-size: 14px; }
+.filter-bar input[type="date"] {
+  border: 1.5px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: inherit;
+}
 
 .modal-backdrop {
   position: fixed; inset: 0;
